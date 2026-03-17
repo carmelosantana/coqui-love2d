@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Love2D Game</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            display: block;
+            border: 1px solid #2a2a3a;
+            border-radius: 4px;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
+        #loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #0a0a0f;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            border-radius: 4px;
+        }
+
+        #loading-overlay.hidden {
+            display: none;
+        }
+
+        .loading-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: #f0f0f0;
+        }
+
+        .progress-bar-container {
+            width: 300px;
+            height: 6px;
+            background: #1a1a2a;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #4a7fb5, #6ba3d6);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .loading-status {
+            font-size: 0.85rem;
+            color: #888;
+        }
+
+        #controls-hint {
+            margin-top: 1rem;
+            font-size: 0.8rem;
+            color: #555;
+        }
+
+        #fullscreen-btn {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(20, 20, 30, 0.8);
+            border: 1px solid #2a2a3a;
+            color: #aaa;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            z-index: 5;
+        }
+
+        #fullscreen-btn:hover {
+            background: rgba(40, 40, 60, 0.9);
+            color: #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+
+        <div id="loading-overlay">
+            <div class="loading-title">Loading Game...</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <div class="loading-status" id="loading-status">Initializing...</div>
+        </div>
+
+        <button id="fullscreen-btn" title="Toggle fullscreen">⛶</button>
+    </div>
+
+    <div id="controls-hint">
+        Click the game area to capture input. Press Escape to release.
+    </div>
+
+    <!-- Coqui API Bridge (must load before love.js) -->
+    <script src="coqui_bridge.js"></script>
+
+    <script>
+        // ── Loading Progress ────────────────────────────────────────────
+        const progressBar = document.getElementById('progress-bar');
+        const loadingStatus = document.getElementById('loading-status');
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        // love.js Module configuration
+        var Module = {
+            canvas: document.getElementById('canvas'),
+
+            setStatus: function (text) {
+                if (!text) {
+                    loadingOverlay.classList.add('hidden');
+                    return;
+                }
+
+                loadingStatus.textContent = text;
+
+                // Parse progress from love.js status messages
+                const match = text.match(/(\d+(?:\.\d+)?)\/(\d+)/);
+                if (match) {
+                    const current = parseFloat(match[1]);
+                    const total = parseFloat(match[2]);
+                    const pct = Math.min(100, (current / total) * 100);
+                    progressBar.style.width = pct + '%';
+                }
+            },
+
+            totalDependencies: 0,
+            monitorRunDependencies: function (left) {
+                this.totalDependencies = Math.max(this.totalDependencies, left);
+                if (left === 0) {
+                    Module.setStatus('');
+                } else {
+                    const loaded = this.totalDependencies - left;
+                    const pct = (loaded / this.totalDependencies) * 100;
+                    progressBar.style.width = pct + '%';
+                    loadingStatus.textContent = 'Loading assets... (' + loaded + '/' + this.totalDependencies + ')';
+                }
+            },
+
+            print: function (text) {
+                console.log(text);
+            },
+
+            printErr: function (text) {
+                console.error(text);
+            },
+        };
+
+        Module.setStatus('Downloading game data...');
+
+        // ── Fullscreen Toggle ───────────────────────────────────────────
+        document.getElementById('fullscreen-btn').addEventListener('click', function () {
+            const container = document.getElementById('game-container');
+            if (!document.fullscreenElement) {
+                container.requestFullscreen().catch(function () {});
+            } else {
+                document.exitFullscreen();
+            }
+        });
+
+        // ── Responsive Canvas ───────────────────────────────────────────
+        window.addEventListener('resize', function () {
+            // love.js handles canvas sizing internally
+        });
+    </script>
+
+    <!-- love.js runtime (generated by love.js build) -->
+    <script src="love.js"></script>
+</body>
+</html>

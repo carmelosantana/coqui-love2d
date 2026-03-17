@@ -1,0 +1,58 @@
+{
+    "name": "coquibot/coqui-toolkit-love2d",
+    "description": "Love2D game development toolkit for Coqui — create, run, and export Love2D games with bot-assisted development",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Carmelo Santana"
+        }
+    ],
+    "keywords": [
+        "php-agents",
+        "love2d",
+        "game-development",
+        "lua",
+        "coqui",
+        "toolkit"
+    ],
+    "require": {
+        "php": "^8.4"
+    },
+    "require-dev": {
+        "carmelosantana/php-agents": "^0.7",
+        "pestphp/pest": "^3.0",
+        "phpstan/phpstan": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "CoquiBot\\Toolkits\\Love2D\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "CoquiBot\\Toolkits\\Love2D\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "analyse": "phpstan analyse"
+    },
+    "extra": {
+        "php-agents": {
+            "toolkits": [
+                "CoquiBot\\Toolkits\\Love2D\\Love2DToolkit"
+            ],
+            "description": "Love2D game development — create, run, build, and export Love2D games with project scaffolding, native execution, web export via love.js, and bot-game communication bridge"
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
