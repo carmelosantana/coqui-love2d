@@ -18,9 +18,13 @@ final class Love2DRunner
 {
     private const int STOP_TIMEOUT_MS = 2000;
     private const int STOP_CHECK_INTERVAL_MS = 50;
+    private const int STARTUP_CHECK_DELAY_US = 500_000;
+    private const string SUPPORTED_LOVE_VERSION = '11.5';
 
     private ?string $loveBinaryCache = null;
     private bool $loveBinarySearched = false;
+    private ?string $loveVersionCache = null;
+    private bool $loveVersionSearched = false;
 
     public function __construct(
         private readonly string $workspacePath,
@@ -32,7 +36,7 @@ final class Love2DRunner
      * Start a Love2D game instance.
      *
      * @param array{project: string, name?: string} $options
-     * @return array{success: bool, message: string, name?: string, pid?: int, project?: string}
+     * @return array<string, mixed>
      */
     public function start(array $options): array
     {
@@ -68,6 +72,8 @@ final class Love2DRunner
             ];
         }
 
+        $loveVersion = $this->detectLoveVersion();
+
         $name = $options['name'] ?? '';
         if ($name === '') {
             $name = $this->generateName($project);
@@ -89,56 +95,101 @@ final class Love2DRunner
             mkdir($runtimeDir, 0755, true);
         }
 
-        $logFile = $runtimeDir . "/{$name}.log";
+        $projectRelative = $this->relativeToWorkspace($resolvedProject);
+        $paths = $this->prepareProjectDebugPaths($resolvedProject, $name);
+
+        $metadata = [
+            'name' => $name,
+            'pid' => 0,
+            'project' => $projectRelative,
+            'project_absolute' => $resolvedProject,
+            'started_at' => date('c'),
+            'state' => 'launching',
+            'debug_directory' => $paths['debug_directory'],
+            'debug_directory_absolute' => $paths['debug_directory_absolute'],
+            'log_file' => $paths['log_file'],
+            'log_file_absolute' => $paths['log_file_absolute'],
+            'latest_log' => $paths['latest_log'],
+            'latest_log_absolute' => $paths['latest_log_absolute'],
+            'love_binary' => $loveBinary,
+            'love_version' => $loveVersion,
+            'supported_love_version' => self::SUPPORTED_LOVE_VERSION,
+        ];
 
         // Spawn Love2D as a detached process
         $command = sprintf(
             'nohup %s %s > %s 2>&1 & echo $!',
             escapeshellarg($loveBinary),
             escapeshellarg($resolvedProject),
-            escapeshellarg($logFile),
+            escapeshellarg($paths['log_file_absolute']),
         );
 
         $pid = $this->spawnProcess($command);
 
         if ($pid === null) {
-            return ['success' => false, 'message' => 'Failed to start Love2D process.'];
-        }
-
-        // Give it a moment to start
-        usleep(300_000); // 300ms
-
-        if (!$this->isProcessAlive($pid)) {
-            $logContent = is_file($logFile) ? file_get_contents($logFile) : '';
-            $this->cleanupFiles($name);
-
             return [
                 'success' => false,
-                'message' => "Love2D process exited immediately.\n" . ($logContent ?: 'No log output.'),
+                'message' => 'Failed to start Love2D process.',
+                'project' => $projectRelative,
+                'debug_directory' => $paths['debug_directory'],
+                'log_file' => $paths['log_file'],
             ];
         }
 
-        // Write PID and metadata
-        file_put_contents($runtimeDir . "/{$name}.pid", (string) $pid);
+        file_put_contents($this->pidPath($name), (string) $pid);
+        $metadata['pid'] = $pid;
+        $this->writeRunMetadata($name, $metadata);
 
-        $metadata = [
-            'name' => $name,
+        // Give it a moment to start
+        usleep(self::STARTUP_CHECK_DELAY_US);
+
+        if (!$this->isProcessAlive($pid)) {
+            $excerpt = $this->readLogExcerpt($paths['log_file_absolute']);
+            $this->removePidFile($name);
+            $this->updateRunMetadata($name, [
+                'state' => 'failed',
+                'stopped_at' => date('c'),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $this->buildLaunchFailureMessage(
+                    name: $name,
+                    project: $projectRelative,
+                    logFile: $paths['log_file'],
+                    debugDirectory: $paths['debug_directory'],
+                    loveBinary: $loveBinary,
+                    loveVersion: $loveVersion,
+                    excerpt: $excerpt,
+                ),
+                'name' => $name,
+                'pid' => $pid,
+                'project' => $projectRelative,
+                'log_file' => $paths['log_file'],
+                'debug_directory' => $paths['debug_directory'],
+                'love_binary' => $loveBinary,
+                'love_version' => $loveVersion,
+            ];
+        }
+
+        $this->updateRunMetadata($name, [
+            'state' => 'running',
             'pid' => $pid,
-            'project' => $project,
-            'project_absolute' => $resolvedProject,
-            'started_at' => date('c'),
-        ];
-        file_put_contents(
-            $runtimeDir . "/{$name}.json",
-            json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
-        );
+        ]);
 
         return [
             'success' => true,
             'message' => "Love2D instance '{$name}' started.",
             'name' => $name,
             'pid' => $pid,
-            'project' => $project,
+            'project' => $projectRelative,
+            'project_absolute' => $resolvedProject,
+            'log_file' => $paths['log_file'],
+            'debug_directory' => $paths['debug_directory'],
+            'latest_log' => $paths['latest_log'],
+            'love_binary' => $loveBinary,
+            'love_version' => $loveVersion,
+            'supported_love_version' => self::SUPPORTED_LOVE_VERSION,
         ];
     }
 
@@ -153,22 +204,41 @@ final class Love2DRunner
             return ['success' => false, 'message' => 'Instance name is required.'];
         }
 
-        $pidFile = $this->runtimeDir() . "/{$name}.pid";
+        $pidFile = $this->pidPath($name);
 
         if (!is_file($pidFile)) {
+            $meta = $this->loadRunMetadata($name);
+
+            if ($meta !== null) {
+                return [
+                    'success' => true,
+                    'message' => "Instance '{$name}' is not currently running. Latest logs remain available at " . ($meta['latest_log'] ?? 'the project debug directory') . '.',
+                ];
+            }
+
             return ['success' => false, 'message' => "No instance found with name '{$name}'."];
         }
 
         $pid = (int) file_get_contents($pidFile);
 
         if ($pid <= 0) {
-            $this->cleanupFiles($name);
-            return ['success' => false, 'message' => "Invalid PID for instance '{$name}'. Files cleaned up."];
+            $this->removePidFile($name);
+            $this->updateRunMetadata($name, [
+                'state' => 'invalid-pid',
+                'stopped_at' => date('c'),
+            ]);
+
+            return ['success' => false, 'message' => "Invalid PID for instance '{$name}'. Runtime state cleaned up."];
         }
 
         if (!$this->isProcessAlive($pid)) {
-            $this->cleanupFiles($name);
-            return ['success' => true, 'message' => "Instance '{$name}' was not running. Files cleaned up."];
+            $this->removePidFile($name);
+            $this->updateRunMetadata($name, [
+                'state' => 'stopped',
+                'stopped_at' => date('c'),
+            ]);
+
+            return ['success' => true, 'message' => "Instance '{$name}' was not running. Runtime state cleaned up, logs preserved."];
         }
 
         // Send SIGTERM first
@@ -181,7 +251,12 @@ final class Love2DRunner
             $waited += self::STOP_CHECK_INTERVAL_MS;
 
             if (!$this->isProcessAlive($pid)) { // @phpstan-ignore booleanNot.alwaysFalse
-                $this->cleanupFiles($name);
+                $this->removePidFile($name);
+                $this->updateRunMetadata($name, [
+                    'state' => 'stopped',
+                    'stopped_at' => date('c'),
+                ]);
+
                 return ['success' => true, 'message' => "Instance '{$name}' stopped gracefully."];
             }
         }
@@ -190,7 +265,11 @@ final class Love2DRunner
         posix_kill($pid, SIGKILL);
         usleep(100_000); // 100ms grace
 
-        $this->cleanupFiles($name);
+        $this->removePidFile($name);
+        $this->updateRunMetadata($name, [
+            'state' => 'killed',
+            'stopped_at' => date('c'),
+        ]);
 
         return ['success' => true, 'message' => "Instance '{$name}' killed (did not respond to SIGTERM)."];
     }
@@ -198,7 +277,7 @@ final class Love2DRunner
     /**
      * Get the status of a Love2D instance.
      *
-     * @return array{running: bool, name: string, pid?: int, project?: string, started_at?: string, uptime?: string}
+     * @return array<string, mixed>
      */
     public function status(string $name): array
     {
@@ -206,23 +285,37 @@ final class Love2DRunner
             return ['running' => false, 'name' => ''];
         }
 
-        $metaFile = $this->runtimeDir() . "/{$name}.json";
+        $meta = $this->loadRunMetadata($name);
 
-        if (!is_file($metaFile)) {
+        if ($meta === null) {
             return ['running' => false, 'name' => $name];
         }
 
-        $meta = json_decode(file_get_contents($metaFile) ?: '{}', true);
-        if (!is_array($meta)) {
-            return ['running' => false, 'name' => $name];
-        }
-
-        $pid = (int) ($meta['pid'] ?? 0);
+        $pid = $this->readPid($name) ?? (int) ($meta['pid'] ?? 0);
         $running = $pid > 0 && $this->isProcessAlive($pid);
 
         if (!$running) {
-            $this->cleanupFiles($name);
-            return ['running' => false, 'name' => $name];
+            $this->removePidFile($name);
+
+            return [
+                'running' => false,
+                'name' => $name,
+                'pid' => $pid,
+                'project' => (string) ($meta['project'] ?? ''),
+                'project_absolute' => (string) ($meta['project_absolute'] ?? ''),
+                'started_at' => (string) ($meta['started_at'] ?? ''),
+                'uptime' => 'stopped',
+                'state' => (string) ($meta['state'] ?? 'stopped'),
+                'log_file' => (string) ($meta['log_file'] ?? ''),
+                'log_file_absolute' => (string) ($meta['log_file_absolute'] ?? ''),
+                'latest_log' => (string) ($meta['latest_log'] ?? ''),
+                'latest_log_absolute' => (string) ($meta['latest_log_absolute'] ?? ''),
+                'debug_directory' => (string) ($meta['debug_directory'] ?? ''),
+                'debug_directory_absolute' => (string) ($meta['debug_directory_absolute'] ?? ''),
+                'love_binary' => (string) ($meta['love_binary'] ?? ''),
+                'love_version' => (string) ($meta['love_version'] ?? ''),
+                'supported_love_version' => (string) ($meta['supported_love_version'] ?? self::SUPPORTED_LOVE_VERSION),
+            ];
         }
 
         $startedAt = (string) ($meta['started_at'] ?? '');
@@ -233,15 +326,26 @@ final class Love2DRunner
             'name' => $name,
             'pid' => $pid,
             'project' => (string) ($meta['project'] ?? ''),
+            'project_absolute' => (string) ($meta['project_absolute'] ?? ''),
             'started_at' => $startedAt,
             'uptime' => $uptime,
+            'state' => 'running',
+            'log_file' => (string) ($meta['log_file'] ?? ''),
+            'log_file_absolute' => (string) ($meta['log_file_absolute'] ?? ''),
+            'latest_log' => (string) ($meta['latest_log'] ?? ''),
+            'latest_log_absolute' => (string) ($meta['latest_log_absolute'] ?? ''),
+            'debug_directory' => (string) ($meta['debug_directory'] ?? ''),
+            'debug_directory_absolute' => (string) ($meta['debug_directory_absolute'] ?? ''),
+            'love_binary' => (string) ($meta['love_binary'] ?? ''),
+            'love_version' => (string) ($meta['love_version'] ?? ''),
+            'supported_love_version' => (string) ($meta['supported_love_version'] ?? self::SUPPORTED_LOVE_VERSION),
         ];
     }
 
     /**
      * List all managed Love2D instances.
      *
-     * @return array<int, array{running: bool, name: string, pid?: int, project?: string, started_at?: string, uptime?: string}>
+     * @return array<int, array<string, mixed>>
      */
     public function listInstances(): array
     {
@@ -250,18 +354,43 @@ final class Love2DRunner
             return [];
         }
 
-        $pidFiles = glob($runtimeDir . '/*.pid');
-        if ($pidFiles === false) {
+        $metaFiles = glob($runtimeDir . '/*.json');
+        if ($metaFiles === false) {
             return [];
         }
 
         $instances = [];
-        foreach ($pidFiles as $pidFile) {
-            $name = basename($pidFile, '.pid');
+        sort($metaFiles);
+
+        foreach ($metaFiles as $metaFile) {
+            $name = basename($metaFile, '.json');
             $instances[] = $this->status($name);
         }
 
         return $instances;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function listKnownRuns(?string $name = null, ?string $project = null): array
+    {
+        $runs = $this->listInstances();
+
+        return array_values(array_filter(
+            $runs,
+            static function (array $run) use ($name, $project): bool {
+                if ($name !== null && $name !== '' && ($run['name'] ?? '') !== $name) {
+                    return false;
+                }
+
+                if ($project !== null && $project !== '' && ($run['project'] ?? '') !== ltrim($project, '/')) {
+                    return false;
+                }
+
+                return true;
+            },
+        ));
     }
 
     /**
@@ -302,8 +431,8 @@ final class Love2DRunner
     /**
      * Create a new Love2D project directory with initial files.
      *
-     * @param array{name: string, title?: string, width?: int, height?: int, template?: string} $options
-     * @return array{success: bool, message: string, path?: string}
+     * @param array{name: string, title?: string, width?: int, height?: int, template?: string, project?: string, path?: string} $options
+     * @return array<string, mixed>
      */
     public function createProject(array $options): array
     {
@@ -314,16 +443,26 @@ final class Love2DRunner
 
         // Sanitize name for filesystem
         $safeName = (string) preg_replace('/[^a-zA-Z0-9_-]/', '-', $name);
-        $projectDir = $this->projectsDir() . '/' . $safeName;
+        $targetPath = trim((string) ($options['project'] ?? $options['path'] ?? ''));
 
-        if (is_dir($projectDir)) {
+        if ($targetPath !== '') {
+            $projectDir = $this->resolveProjectPath($targetPath);
+            if ($projectDir === null) {
+                return ['success' => false, 'message' => "Invalid project path: '{$targetPath}'."];
+            }
+        } else {
+            $projectDir = $this->projectsDir() . '/' . $safeName;
+            $targetPath = $this->relativeToWorkspace($projectDir);
+        }
+
+        if (is_dir($projectDir) && $this->directoryHasFiles($projectDir)) {
             return [
                 'success' => false,
-                'message' => "Project '{$safeName}' already exists at love2d/projects/{$safeName}.",
+                'message' => "Project '{$safeName}' already exists at {$this->relativeToWorkspace($projectDir)}.",
             ];
         }
 
-        if (!mkdir($projectDir, 0755, true)) {
+        if (!is_dir($projectDir) && !mkdir($projectDir, 0755, true)) {
             return ['success' => false, 'message' => "Failed to create project directory."];
         }
 
@@ -337,6 +476,7 @@ final class Love2DRunner
         $title = $options['title'] ?? ucwords(str_replace(['-', '_'], ' ', $safeName));
         $width = $options['width'] ?? 800;
         $height = $options['height'] ?? 600;
+        $detectedLoveVersion = $this->detectLoveVersion();
 
         // Determine template
         $template = $options['template'] ?? 'blank';
@@ -344,10 +484,17 @@ final class Love2DRunner
 
         if (is_dir($templateDir)) {
             // Copy template files with placeholder replacement
-            $this->applyTemplate($templateDir, $projectDir, $title, $width, $height);
+            $this->applyTemplate(
+                $templateDir,
+                $projectDir,
+                $title,
+                $width,
+                $height,
+                self::SUPPORTED_LOVE_VERSION,
+            );
         } else {
             // Fallback: write default conf.lua
-            $confLua = $this->generateConfLua($title, $width, $height);
+            $confLua = $this->generateConfLua($title, $width, $height, self::SUPPORTED_LOVE_VERSION);
             file_put_contents($projectDir . '/conf.lua', $confLua);
 
             // Write a minimal main.lua
@@ -361,14 +508,18 @@ final class Love2DRunner
         }
 
         // Write .gitignore
-        file_put_contents($projectDir . '/.gitignore', "*.love\n/web/\n");
+        file_put_contents($projectDir . '/.gitignore', "*.love\n/web/\n/.coqui/\n");
 
-        $relativePath = 'love2d/projects/' . $safeName;
+        $relativePath = $this->relativeToWorkspace($projectDir);
+        $debugDirectory = $this->relativeToWorkspace($projectDir . '/.coqui/love2d/logs');
 
         return [
             'success' => true,
             'message' => "Project '{$safeName}' created at {$relativePath}.",
             'path' => $relativePath,
+            'debug_directory' => $debugDirectory,
+            'supported_love_version' => self::SUPPORTED_LOVE_VERSION,
+            'detected_love_version' => $detectedLoveVersion,
         ];
     }
 
@@ -535,7 +686,7 @@ final class Love2DRunner
      */
     public function projectsDir(): string
     {
-        return rtrim($this->workspacePath, '/') . '/love2d/projects';
+        return rtrim($this->workspacePath, '/') . '/projects';
     }
 
     /**
@@ -543,7 +694,18 @@ final class Love2DRunner
      */
     public function logPath(string $name): string
     {
+        $meta = $this->loadRunMetadata($name);
+
+        if ($meta !== null && isset($meta['log_file_absolute']) && is_string($meta['log_file_absolute'])) {
+            return $meta['log_file_absolute'];
+        }
+
         return $this->runtimeDir() . "/{$name}.log";
+    }
+
+    public function supportedLoveVersion(): string
+    {
+        return self::SUPPORTED_LOVE_VERSION;
     }
 
     /**
@@ -617,6 +779,38 @@ final class Love2DRunner
         return null;
     }
 
+    public function detectLoveVersion(): ?string
+    {
+        if ($this->loveVersionSearched) {
+            return $this->loveVersionCache;
+        }
+
+        $this->loveVersionSearched = true;
+        $loveBinary = $this->findLoveBinary();
+        if ($loveBinary === null) {
+            return null;
+        }
+
+        $output = [];
+        $exitCode = 0;
+        exec(escapeshellarg($loveBinary) . ' --version 2>&1', $output, $exitCode);
+
+        if ($exitCode !== 0) {
+            return null;
+        }
+
+        $versionText = trim(implode(' ', $output));
+        if ($versionText === '') {
+            return null;
+        }
+
+        if (preg_match('/(?:love|l[öo]ve)\s+(\d+\.\d+(?:\.\d+)?)/iu', $versionText, $matches) === 1) {
+            $this->loveVersionCache = $matches[1];
+        }
+
+        return $this->loveVersionCache;
+    }
+
     /**
      * Find the love.js binary (npm package).
      */
@@ -642,12 +836,13 @@ final class Love2DRunner
     /**
      * Apply a template directory to a project, replacing placeholders.
      */
-    private function applyTemplate(string $templateDir, string $projectDir, string $title, int $width, int $height): void
+    private function applyTemplate(string $templateDir, string $projectDir, string $title, int $width, int $height, string $loveVersion): void
     {
         $replacements = [
             '{{TITLE}}' => $title,
             '{{WIDTH}}' => (string) $width,
             '{{HEIGHT}}' => (string) $height,
+            '{{LOVE_VERSION}}' => $loveVersion,
         ];
 
         $iterator = new \RecursiveIteratorIterator(
@@ -716,12 +911,13 @@ final class Love2DRunner
             LUA;
     }
 
-    private function generateConfLua(string $title, int $width, int $height): string
+    private function generateConfLua(string $title, int $width, int $height, string $loveVersion): string
     {
         return <<<LUA
             function love.conf(t)
                 t.identity = "{$title}"
-                t.version = "11.5"
+                t.version = "{$loveVersion}"
+                t.console = true
 
                 t.window.title = "{$title}"
                 t.window.width = {$width}
@@ -814,20 +1010,208 @@ final class Love2DRunner
         return $pid > 0 ? $pid : null;
     }
 
-    private function cleanupFiles(string $name): void
+    private function pidPath(string $name): string
     {
-        $runtimeDir = $this->runtimeDir();
+        return $this->runtimeDir() . "/{$name}.pid";
+    }
 
-        $files = [
-            "{$runtimeDir}/{$name}.pid",
-            "{$runtimeDir}/{$name}.json",
+    private function metadataPath(string $name): string
+    {
+        return $this->runtimeDir() . "/{$name}.json";
+    }
+
+    private function removePidFile(string $name): void
+    {
+        $pidFile = $this->pidPath($name);
+        if (is_file($pidFile)) {
+            @unlink($pidFile);
+        }
+    }
+
+    private function readPid(string $name): ?int
+    {
+        $pidFile = $this->pidPath($name);
+        if (!is_file($pidFile)) {
+            return null;
+        }
+
+        $pid = (int) (file_get_contents($pidFile) ?: '0');
+
+        return $pid > 0 ? $pid : null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function loadRunMetadata(string $name): ?array
+    {
+        $metaFile = $this->metadataPath($name);
+        if (!is_file($metaFile)) {
+            return null;
+        }
+
+        $meta = json_decode(file_get_contents($metaFile) ?: '{}', true);
+
+        return is_array($meta) ? $meta : null;
+    }
+
+    /**
+     * @param array<string, mixed> $metadata
+     */
+    private function writeRunMetadata(string $name, array $metadata): void
+    {
+        file_put_contents(
+            $this->metadataPath($name),
+            json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $changes
+     */
+    private function updateRunMetadata(string $name, array $changes): void
+    {
+        $metadata = $this->loadRunMetadata($name) ?? ['name' => $name];
+        $this->writeRunMetadata($name, [...$metadata, ...$changes]);
+    }
+
+    /**
+     * @return array{debug_directory: string, debug_directory_absolute: string, log_file: string, log_file_absolute: string, latest_log: string, latest_log_absolute: string}
+     */
+    private function prepareProjectDebugPaths(string $projectDir, string $name): array
+    {
+        $debugDirectoryAbsolute = $projectDir . '/.coqui/love2d/logs';
+        if (!is_dir($debugDirectoryAbsolute)) {
+            mkdir($debugDirectoryAbsolute, 0755, true);
+        }
+
+        $safeName = (string) preg_replace('/[^a-zA-Z0-9_-]/', '-', $name);
+        $timestamp = (new \DateTimeImmutable())->format('Ymd-His');
+        $logFileAbsolute = $debugDirectoryAbsolute . '/' . $timestamp . '-' . $safeName . '.log';
+        $latestLogAbsolute = $debugDirectoryAbsolute . '/latest.log';
+
+        if (!is_file($logFileAbsolute)) {
+            touch($logFileAbsolute);
+        }
+
+        $this->refreshLatestLogPointer($logFileAbsolute, $latestLogAbsolute);
+
+        return [
+            'debug_directory' => $this->relativeToWorkspace($debugDirectoryAbsolute),
+            'debug_directory_absolute' => $debugDirectoryAbsolute,
+            'log_file' => $this->relativeToWorkspace($logFileAbsolute),
+            'log_file_absolute' => $logFileAbsolute,
+            'latest_log' => $this->relativeToWorkspace($latestLogAbsolute),
+            'latest_log_absolute' => $latestLogAbsolute,
         ];
+    }
 
-        foreach ($files as $file) {
-            if (is_file($file)) {
-                @unlink($file);
+    private function refreshLatestLogPointer(string $logFileAbsolute, string $latestLogAbsolute): void
+    {
+        if (is_link($latestLogAbsolute) || is_file($latestLogAbsolute)) {
+            @unlink($latestLogAbsolute);
+        }
+
+        $target = basename($logFileAbsolute);
+        if (function_exists('symlink') && @symlink($target, $latestLogAbsolute)) {
+            return;
+        }
+
+        if (function_exists('link') && @link($logFileAbsolute, $latestLogAbsolute)) {
+            return;
+        }
+
+        @copy($logFileAbsolute, $latestLogAbsolute);
+    }
+
+    private function readLogExcerpt(string $logFile, int $maxLines = 20): string
+    {
+        if (!is_file($logFile)) {
+            return '';
+        }
+
+        $lines = file($logFile, FILE_IGNORE_NEW_LINES);
+        if ($lines === false || $lines === []) {
+            return '';
+        }
+
+        $excerpt = array_slice($lines, -$maxLines);
+
+        return trim(implode("\n", $excerpt));
+    }
+
+    private function buildLaunchFailureMessage(
+        string $name,
+        string $project,
+        string $logFile,
+        string $debugDirectory,
+        string $loveBinary,
+        ?string $loveVersion,
+        string $excerpt,
+    ): string {
+        $message = "Love2D exited during startup.\n\n";
+        $message .= "- Instance: {$name}\n";
+        $message .= "- Project: {$project}\n";
+        $message .= "- Log file: {$logFile}\n";
+        $message .= "- Debug directory: {$debugDirectory}\n";
+        $message .= "- Love2D binary: {$loveBinary}\n";
+        $message .= '- Detected Love2D version: ' . ($loveVersion ?? 'unknown') . "\n";
+        $message .= '- Toolkit baseline: ' . self::SUPPORTED_LOVE_VERSION . "\n\n";
+
+        if ($excerpt !== '') {
+            $message .= "Startup log excerpt:\n```log\n{$excerpt}\n```\n\n";
+        } else {
+            $message .= "No log output was captured before the process exited.\n\n";
+        }
+
+        $message .= 'Open the log file directly or use `love2d_log` with this instance name to inspect the failure.';
+
+        return $message;
+    }
+
+    private function relativeToWorkspace(string $path): string
+    {
+        $normalized = str_replace('\\', '/', $path);
+        $resolvedPath = realpath($path);
+        $candidates = [rtrim(str_replace('\\', '/', $this->workspacePath), '/')];
+
+        $resolvedWorkspace = realpath($this->workspacePath);
+        if ($resolvedWorkspace !== false) {
+            $candidates[] = rtrim(str_replace('\\', '/', $resolvedWorkspace), '/');
+        }
+
+        $pathsToCheck = [$normalized];
+        if ($resolvedPath !== false) {
+            $pathsToCheck[] = rtrim(str_replace('\\', '/', $resolvedPath), '/');
+        }
+
+        foreach ($pathsToCheck as $candidatePath) {
+            foreach ($candidates as $workspace) {
+                if (str_starts_with($candidatePath, $workspace . '/')) {
+                    return substr($candidatePath, strlen($workspace) + 1);
+                }
             }
         }
+
+        return ltrim($normalized, '/');
+    }
+
+    private function directoryHasFiles(string $directory): bool
+    {
+        $items = scandir($directory);
+        if ($items === false) {
+            return false;
+        }
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 
     private function calculateUptime(string $startedAt): string

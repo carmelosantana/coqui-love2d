@@ -21,8 +21,10 @@ test('love2d tool has correct name', function () {
 test('love2d tool has description', function () {
     $runner = new Love2DRunner(workspacePath: sys_get_temp_dir());
     $tool = new Love2DTool($runner);
+    $description = $tool->description();
 
-    expect($tool->description())->toBeString()->not->toBeEmpty();
+    expect($description)->toBeString();
+    expect($description === '')->toBeFalse();
 });
 
 test('love2d tool has valid function schema', function () {
@@ -53,7 +55,7 @@ test('love2d tool list action works with no instances', function () {
     $tool = new Love2DTool($runner);
 
     $result = $tool->execute(['action' => 'list']);
-    expect($result->status)->not->toBe(ToolResultStatus::Error);
+    expect($result->status === ToolResultStatus::Error)->toBeFalse();
 
     rmdir($tmpDir);
 });

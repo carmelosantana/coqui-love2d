@@ -9,6 +9,24 @@ namespace CarmeloSantana\CoquiToolkitLove2D\Storage;
  *
  * Each Love2D instance has its own log file (stdout/stderr). This store
  * provides structured access to parsed log entries for debugging and monitoring.
+ *
+ * @phpstan-type LogEntry array{
+ *     id: int,
+ *     timestamp: string,
+ *     level: string,
+ *     message: string,
+ *     source: string,
+ *     instance_name?: string|null,
+ *     project_path?: string|null,
+ *     log_file?: string|null,
+ *     line_number?: int|null
+ * }
+ * @phpstan-type LogSearchFilters array{
+ *     query?: string,
+ *     level?: string|null,
+ *     instance_name?: string|null,
+ *     project_path?: string|null
+ * }
  */
 final class Love2DLogStore
 {
@@ -41,7 +59,7 @@ final class Love2DLogStore
      *
      * @return int Number of entries imported
      */
-    public function importFromFile(string $logFile, int $afterLine = 0): int
+    public function importFromFile(string $logFile, ?string $instanceName = null, ?string $projectPath = null): int
     {
         if (!is_file($logFile)) {
             return 0;
@@ -52,27 +70,41 @@ final class Love2DLogStore
             return 0;
         }
 
+        $afterLine = $this->getImportOffset($logFile);
         $imported = 0;
         $db = $this->connect();
+        $db->beginTransaction();
         $stmt = $db->prepare(
-            'INSERT INTO output_log (timestamp, level, message, source) VALUES (?, ?, ?, ?)',
+            'INSERT INTO output_log (timestamp, level, message, source, instance_name, project_path, log_file, line_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         );
 
-        foreach ($lines as $i => $line) {
-            if ($i < $afterLine) {
-                continue;
+        try {
+            foreach ($lines as $i => $line) {
+                if ($i < $afterLine) {
+                    continue;
+                }
+
+                $level = $this->detectLevel($line);
+                $source = str_contains($line, 'Error') || str_contains($line, 'error') ? 'stderr' : 'stdout';
+
+                $stmt->execute([
+                    date('c'),
+                    $level,
+                    $line,
+                    $source,
+                    $instanceName,
+                    $projectPath,
+                    $logFile,
+                    $i + 1,
+                ]);
+                $imported++;
             }
 
-            $level = $this->detectLevel($line);
-            $source = str_contains($line, 'Error') || str_contains($line, 'error') ? 'stderr' : 'stdout';
-
-            $stmt->execute([
-                date('c'),
-                $level,
-                $line,
-                $source,
-            ]);
-            $imported++;
+            $this->setImportOffset($logFile, count($lines));
+            $db->commit();
+        } catch (\Throwable $e) {
+            $db->rollBack();
+            throw $e;
         }
 
         return $imported;
@@ -81,22 +113,42 @@ final class Love2DLogStore
     /**
      * Get the most recent log entries, optionally filtered by level.
      *
-     * @return array<int, array{id: int, timestamp: string, level: string, message: string, source: string}>
+        * @return list<LogEntry>
      */
-    public function tail(int $limit = 20, ?string $level = null): array
+    public function tail(int $limit = 20, ?string $level = null, ?string $instanceName = null, ?string $projectPath = null): array
     {
         $db = $this->connect();
         $limit = max(1, min($limit, 500));
 
+        $where = [];
+        $params = [];
+
         if ($level !== null && $level !== '') {
-            $stmt = $db->prepare('SELECT * FROM output_log WHERE level = ? ORDER BY id DESC LIMIT ?');
-            $stmt->execute([$level, $limit]);
-        } else {
-            $stmt = $db->prepare('SELECT * FROM output_log ORDER BY id DESC LIMIT ?');
-            $stmt->execute([$limit]);
+            $where[] = 'level = ?';
+            $params[] = $level;
         }
 
-        /** @var array<int, array{id: int, timestamp: string, level: string, message: string, source: string}> $rows */
+        if ($instanceName !== null && $instanceName !== '') {
+            $where[] = 'instance_name = ?';
+            $params[] = $instanceName;
+        }
+
+        if ($projectPath !== null && $projectPath !== '') {
+            $where[] = 'project_path = ?';
+            $params[] = $projectPath;
+        }
+
+        $sql = 'SELECT * FROM output_log';
+        if ($where !== []) {
+            $sql .= ' WHERE ' . implode(' AND ', $where);
+        }
+        $sql .= ' ORDER BY id DESC LIMIT ?';
+        $params[] = $limit;
+
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+
+        /** @var list<LogEntry> $rows */
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
         return array_reverse($rows);
@@ -109,9 +161,9 @@ final class Love2DLogStore
      * - search(['query' => '...', 'level' => '...'], $limit)
      * - search($query, $level, $limit)
      *
-     * @param array{query?: string, level?: string}|string $filters Query string or filter array
+    * @param LogSearchFilters|string $filters Query string or filter array
      * @param string|int|null $levelOrLimit Level string (when $filters is string) or limit (when $filters is array)
-     * @return array<int, array{id: int, timestamp: string, level: string, message: string, source: string}>
+    * @return list<LogEntry>
      */
     public function search(array|string $filters, string|int|null $levelOrLimit = null, int $limit = 50): array
     {
@@ -147,6 +199,16 @@ final class Love2DLogStore
             $params[] = $filters['level'];
         }
 
+        if (isset($filters['instance_name']) && $filters['instance_name'] !== '') {
+            $where[] = 'instance_name = ?';
+            $params[] = $filters['instance_name'];
+        }
+
+        if (isset($filters['project_path']) && $filters['project_path'] !== '') {
+            $where[] = 'project_path = ?';
+            $params[] = $filters['project_path'];
+        }
+
         $sql = 'SELECT * FROM output_log';
         if ($where !== []) {
             $sql .= ' WHERE ' . implode(' AND ', $where);
@@ -157,7 +219,7 @@ final class Love2DLogStore
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
 
-        /** @var array<int, array{id: int, timestamp: string, level: string, message: string, source: string}> $rows */
+        /** @var list<LogEntry> $rows */
         $rows = $stmt->fetchAll(\PDO::FETCH_ASSOC);
 
         return array_reverse($rows);
@@ -236,6 +298,7 @@ final class Love2DLogStore
         }
         unset($countStmt);
         $db->exec('DELETE FROM output_log');
+        $db->exec('DELETE FROM log_import_state');
         $db->exec('VACUUM');
 
         return $count;
@@ -290,12 +353,73 @@ final class Love2DLogStore
                 timestamp TEXT NOT NULL,
                 level TEXT NOT NULL DEFAULT 'info',
                 message TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'stdout'
+                source TEXT NOT NULL DEFAULT 'stdout',
+                instance_name TEXT DEFAULT NULL,
+                project_path TEXT DEFAULT NULL,
+                log_file TEXT DEFAULT NULL,
+                line_number INTEGER DEFAULT NULL
             )
             SQL);
 
+        $this->db?->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS log_import_state (
+                log_file TEXT PRIMARY KEY,
+                last_line INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            SQL);
+
+        $this->migrateColumn('output_log', 'instance_name', 'TEXT DEFAULT NULL');
+        $this->migrateColumn('output_log', 'project_path', 'TEXT DEFAULT NULL');
+        $this->migrateColumn('output_log', 'log_file', 'TEXT DEFAULT NULL');
+        $this->migrateColumn('output_log', 'line_number', 'INTEGER DEFAULT NULL');
+
         $this->db?->exec('CREATE INDEX IF NOT EXISTS idx_level ON output_log (level)');
         $this->db?->exec('CREATE INDEX IF NOT EXISTS idx_source ON output_log (source)');
+        $this->db?->exec('CREATE INDEX IF NOT EXISTS idx_instance_name ON output_log (instance_name)');
+        $this->db?->exec('CREATE INDEX IF NOT EXISTS idx_project_path ON output_log (project_path)');
+        $this->db?->exec('CREATE INDEX IF NOT EXISTS idx_log_file ON output_log (log_file)');
+    }
+
+    private function migrateColumn(string $table, string $column, string $definition): void
+    {
+        $db = $this->db;
+        if ($db === null) {
+            return;
+        }
+
+        $stmt = $db->query('PRAGMA table_info(' . $table . ')');
+        if ($stmt === false) {
+            return;
+        }
+
+        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            if (($row['name'] ?? null) === $column) {
+                return;
+            }
+        }
+
+        $db->exec(sprintf('ALTER TABLE %s ADD COLUMN %s %s', $table, $column, $definition));
+    }
+
+    private function getImportOffset(string $logFile): int
+    {
+        $db = $this->connect();
+        $stmt = $db->prepare('SELECT last_line FROM log_import_state WHERE log_file = ?');
+        $stmt->execute([$logFile]);
+        $value = $stmt->fetchColumn();
+
+        return is_numeric($value) ? (int) $value : 0;
+    }
+
+    private function setImportOffset(string $logFile, int $lastLine): void
+    {
+        $db = $this->connect();
+        $stmt = $db->prepare(
+            'INSERT INTO log_import_state (log_file, last_line, updated_at) VALUES (?, ?, ?) '
+            . 'ON CONFLICT(log_file) DO UPDATE SET last_line = excluded.last_line, updated_at = excluded.updated_at',
+        );
+        $stmt->execute([$logFile, $lastLine, date('c')]);
     }
 
     private function detectLevel(string $line): string

@@ -1,8 +1,8 @@
 -- Platformer template — conf.lua
 function love.conf(t)
     t.identity = nil
-    t.version = '11.5'
-    t.console = false
+    t.version = '{{LOVE_VERSION}}'
+    t.console = true
 
     t.window.title = '{{TITLE}}'
     t.window.icon = nil

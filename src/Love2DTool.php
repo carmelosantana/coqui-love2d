@@ -81,11 +81,11 @@ final class Love2DTool implements ToolInterface
                         ],
                         'name' => [
                             'type' => 'string',
-                            'description' => 'Project name (for "create") or instance name (for "run", "stop", "status"). For "create", this becomes the directory name.',
+                            'description' => 'Project name (for "create") or instance name (for "run", "stop", "status"). For "create", this becomes the default directory name when no explicit project path is given.',
                         ],
                         'project' => [
                             'type' => 'string',
-                            'description' => 'Project directory path relative to workspace (e.g. "love2d/projects/my-game"). Required for "run", "build", "export_web".',
+                            'description' => 'Project directory path relative to workspace. For "create", this is an optional target scaffold directory (for example "projects/my-game" or an existing Coqui project directory). For "run", "build", and "export_web", this is the Love2D project root.',
                         ],
                         'title' => [
                             'type' => 'string',
@@ -141,6 +141,9 @@ final class Love2DTool implements ToolInterface
         if (isset($input['height'])) {
             $options['height'] = (int) $input['height'];
         }
+        if (isset($input['project'])) {
+            $options['project'] = (string) $input['project'];
+        }
 
         $result = $this->runner->createProject($options);
 
@@ -154,8 +157,11 @@ final class Love2DTool implements ToolInterface
         $output .= "| Setting | Value |\n|---------|-------|\n";
         $output .= "| **Name** | `{$name}` |\n";
         $output .= "| **Path** | {$path} |\n";
+        $output .= "| **Debug Logs** | " . ($result['debug_directory'] ?? '-') . " |\n";
         $output .= "| **Title** | " . ($options['title'] ?? ucwords(str_replace(['-', '_'], ' ', $name))) . " |\n";
         $output .= "| **Size** | " . ($options['width'] ?? 800) . "×" . ($options['height'] ?? 600) . " |\n";
+        $output .= "| **Toolkit Target** | " . ($result['supported_love_version'] ?? $this->runner->supportedLoveVersion()) . " |\n";
+        $output .= "| **Detected Runtime** | " . (($result['detected_love_version'] ?? null) ?: 'Not detected') . " |\n";
         $output .= "\n### Project Structure\n\n";
         $output .= "```\n";
         $output .= "{$name}/\n";
@@ -174,6 +180,7 @@ final class Love2DTool implements ToolInterface
         $output .= "2. Native test: `love2d` action `run` with `project: \"{$path}\"`\n";
         $output .= "3. Web export: `love2d` action `export_web` with `project: \"{$path}\"`\n";
         $output .= "4. Serve web build: `webserver` action `start` with `docroot: \"{$path}/web/release\"`\n";
+        $output .= "5. Startup logs live in `{$result['debug_directory']}` and each run updates `latest.log` there\n";
 
         return ToolResult::success($output);
     }
@@ -209,7 +216,13 @@ final class Love2DTool implements ToolInterface
         $output .= "| **Instance** | `" . ($result['name'] ?? '') . "` |\n";
         $output .= "| **PID** | " . ($result['pid'] ?? '') . " |\n";
         $output .= "| **Project** | " . ($result['project'] ?? '') . " |\n";
-        $output .= "\nThe game window should now be visible. Use `stop` to close it.";
+        $output .= "| **Run Log** | " . ($result['log_file'] ?? '-') . " |\n";
+        $output .= "| **Stable Log** | " . ($result['latest_log'] ?? '-') . " |\n";
+        $output .= "| **Debug Directory** | " . ($result['debug_directory'] ?? '-') . " |\n";
+        $output .= "| **Love2D Binary** | " . ($result['love_binary'] ?? '-') . " |\n";
+        $output .= "| **Detected Version** | " . (($result['love_version'] ?? null) ?: 'Unknown') . " |\n";
+        $output .= "| **Toolkit Target** | " . ($result['supported_love_version'] ?? $this->runner->supportedLoveVersion()) . " |\n";
+        $output .= "\nThe game window should now be visible. If startup looks wrong, inspect `" . ($result['latest_log'] ?? ($result['log_file'] ?? 'the debug log')) . "` or run `love2d_log` for this instance.";
 
         return ToolResult::success($output);
     }
@@ -251,6 +264,9 @@ final class Love2DTool implements ToolInterface
 
         if (!$status['running']) {
             $output .= "**Status:** Not running\n";
+            if (isset($status['latest_log']) && $status['latest_log'] !== '') {
+                $output .= "**Latest log:** " . $status['latest_log'] . "\n";
+            }
             return ToolResult::success($output);
         }
 
@@ -260,6 +276,12 @@ final class Love2DTool implements ToolInterface
         $output .= "| **Project** | " . ($status['project'] ?? '-') . " |\n";
         $output .= "| **Uptime** | " . ($status['uptime'] ?? '-') . " |\n";
         $output .= "| **Started** | " . ($status['started_at'] ?? '-') . " |\n";
+        $output .= "| **Run Log** | " . ($status['log_file'] ?? '-') . " |\n";
+        $output .= "| **Stable Log** | " . ($status['latest_log'] ?? '-') . " |\n";
+        $output .= "| **Debug Directory** | " . ($status['debug_directory'] ?? '-') . " |\n";
+        $output .= "| **Love2D Binary** | " . ($status['love_binary'] ?? '-') . " |\n";
+        $output .= "| **Detected Version** | " . (($status['love_version'] ?? null) ?: 'Unknown') . " |\n";
+        $output .= "| **Toolkit Target** | " . ($status['supported_love_version'] ?? $this->runner->supportedLoveVersion()) . " |\n";
 
         return ToolResult::success($output);
     }
@@ -273,14 +295,15 @@ final class Love2DTool implements ToolInterface
         }
 
         $output = "## Love2D Instances\n\n";
-        $output .= "| Name | Status | Project | Uptime |\n";
-        $output .= "|------|--------|---------|--------|\n";
+        $output .= "| Name | Status | Project | Uptime | Latest Log |\n";
+        $output .= "|------|--------|---------|--------|------------|\n";
 
         foreach ($instances as $instance) {
             $status = $instance['running'] ? 'Running' : 'Stopped';
             $project = $instance['project'] ?? '-';
             $uptime = $instance['uptime'] ?? '-';
-            $output .= "| `{$instance['name']}` | {$status} | {$project} | {$uptime} |\n";
+            $latestLog = $instance['latest_log'] ?? $instance['log_file'] ?? '-';
+            $output .= "| `{$instance['name']}` | {$status} | {$project} | {$uptime} | {$latestLog} |\n";
         }
 
         return ToolResult::success($output);

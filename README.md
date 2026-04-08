@@ -6,6 +6,7 @@ A comprehensive Love2D game development toolkit for [Coqui](https://github.com/c
 
 - **Project Scaffolding** — Create Love2D projects from 5 built-in templates (blank, platformer, top-down, puzzle, particle-demo)
 - **Native Execution** — Launch and manage Love2D processes with full lifecycle control
+- **Project-Local Debug Logs** — Every run writes a timestamped log file inside the game project and updates a stable latest.log pointer
 - **Code Generation** — Generate 12 game component types and 6 scene types as ready-to-use Lua modules
 - **Web Export** — Export games as browser-playable builds via love.js
 - **Log Monitoring** — Structured log viewing and search for debugging
@@ -15,7 +16,8 @@ A comprehensive Love2D game development toolkit for [Coqui](https://github.com/c
 ## Requirements
 
 - PHP 8.4+
-- [LÖVE](https://love2d.org/) 11.5+ installed and on PATH (`love` binary)
+- [LÖVE](https://love2d.org/) installed and on PATH (`love` binary)
+- Toolkit baseline: LÖVE 11.5
 - Node.js + `love.js` npm package (for web export only)
 - [carmelosantana/php-agents](https://github.com/carmelosantana/php-agents) ^0.5
 
@@ -33,10 +35,10 @@ The toolkit is auto-discovered by Coqui on next startup — no configuration nee
 
 | Action | Description |
 |--------|-------------|
-| `create` | Scaffold a new project with conf.lua, main.lua, assets, and Coqui API bridge |
+| `create` | Scaffold a new project with conf.lua, main.lua, assets, Coqui API bridge, and project-local debug logging |
 | `run` | Launch Love2D with a project |
 | `stop` | Stop a running instance |
-| `status` | Get instance details (PID, uptime, project path) |
+| `status` | Get instance details (PID, uptime, project path, log paths, binary, detected version) |
 | `list` | Show all managed instances |
 | `build` | Create a .love archive for distribution |
 | `export_web` | Export for browser play via love.js |
@@ -58,9 +60,58 @@ The toolkit is auto-discovered by Coqui on next startup — no configuration nee
 
 | Action | Description |
 |--------|-------------|
-| `tail` | Show recent log entries (filterable by level) |
-| `search` | Search logs by keyword |
+| `tail` | Show recent log entries (filterable by level, instance name, or project path) |
+| `search` | Search logs by keyword, optionally filtered by instance name or project path |
 | `clear` | Clear all log entries |
+
+## Project Layout
+
+New projects default to the Coqui workspace project root instead of a Love2D-specific subtree:
+
+```text
+workspace/
+  projects/
+    my-game/
+      main.lua
+      conf.lua
+      assets/
+      lib/
+      .coqui/
+        love2d/
+          logs/
+            20260407-153012-love-my-game.log
+            latest.log
+```
+
+You can also scaffold into an existing Coqui project directory by passing `project` to `love2d create`.
+
+## Logging and Debugging
+
+Every `love2d run` launch now does the following:
+
+- Writes a timestamped per-run log file inside `.coqui/love2d/logs/` in the project directory
+- Updates a stable `latest.log` pointer in the same folder
+- Persists run metadata so logs remain discoverable after crashes or normal shutdowns
+- Surfaces the log paths directly in `love2d run`, `love2d status`, and `love2d_log` output
+
+Recommended workflow:
+
+1. Create or scaffold into a project directory
+2. Run the game with `love2d`
+3. If startup looks wrong, inspect `latest.log` in the project or use `love2d_log tail`
+4. Search specific failures with `love2d_log search`
+
+If Love2D exits immediately, the toolkit now returns the project path, log path, debug directory, binary path, detected version, and a startup log excerpt to make failures easier to diagnose.
+
+## Version Handling
+
+The toolkit currently targets LÖVE 11.5 as its verified baseline. It no longer scatters that version across multiple code paths:
+
+- Scaffolded `conf.lua` files are generated from a centralized baseline
+- `love2d run` and `love2d status` surface the detected installed runtime version
+- Error output includes both the detected runtime version and the toolkit baseline
+
+This keeps the toolkit aligned with the current stable Love2D release while making version assumptions explicit.
 
 ## Templates
 

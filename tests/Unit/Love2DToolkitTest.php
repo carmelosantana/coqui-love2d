@@ -31,11 +31,11 @@ test('each tool implements ToolInterface', function () {
 
 test('guidelines returns non-empty string with XML tag', function () {
     $toolkit = new Love2DToolkit(workspacePath: sys_get_temp_dir());
+    $guidelines = $toolkit->guidelines();
 
-    expect($toolkit->guidelines())
-        ->toBeString()
-        ->not->toBeEmpty()
-        ->toContain('LOVE2D-TOOLKIT-GUIDELINES');
+    expect($guidelines)->toBeString();
+    expect($guidelines === '')->toBeFalse();
+    expect($guidelines)->toContain('LOVE2D-TOOLKIT-GUIDELINES');
 });
 
 test('fromEnv creates instance', function () {

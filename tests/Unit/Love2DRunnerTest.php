@@ -7,13 +7,13 @@ use CarmeloSantana\CoquiToolkitLove2D\Runtime\Love2DRunner;
 test('projectsDir is within workspace', function () {
     $runner = new Love2DRunner(workspacePath: '/tmp/test-workspace');
 
-    expect($runner->projectsDir())->toBe('/tmp/test-workspace/love2d/projects');
+    expect($runner->projectsDir())->toBe('/tmp/test-workspace/projects');
 });
 
 test('projectsDir strips trailing slash', function () {
     $runner = new Love2DRunner(workspacePath: '/tmp/test-workspace/');
 
-    expect($runner->projectsDir())->toBe('/tmp/test-workspace/love2d/projects');
+    expect($runner->projectsDir())->toBe('/tmp/test-workspace/projects');
 });
 
 test('resolveProjectPath blocks path traversal', function () {
@@ -55,13 +55,15 @@ test('createProject scaffolds directory structure', function () {
 
     expect($result['success'])->toBeTrue();
 
-    $projectPath = $tmpDir . '/love2d/projects/test-project';
+    $projectPath = $tmpDir . '/projects/test-project';
     expect(is_dir($projectPath))->toBeTrue();
     expect(is_file($projectPath . '/main.lua'))->toBeTrue();
     expect(is_file($projectPath . '/conf.lua'))->toBeTrue();
     expect(is_dir($projectPath . '/assets'))->toBeTrue();
     expect(is_dir($projectPath . '/lib'))->toBeTrue();
     expect(is_file($projectPath . '/lib/coqui_api.lua'))->toBeTrue();
+    expect($result['path'])->toBe('projects/test-project');
+    expect($result['debug_directory'])->toBe('projects/test-project/.coqui/love2d/logs');
 
     // Cleanup
     $files = new RecursiveIteratorIterator(
@@ -111,8 +113,12 @@ test('createProject with template applies template files', function () {
 
     expect($result['success'])->toBeTrue();
 
-    $mainLua = file_get_contents($tmpDir . '/love2d/projects/platformer-game/main.lua');
+    $mainLua = file_get_contents($tmpDir . '/projects/platformer-game/main.lua');
     expect($mainLua)->toContain('Platformer Template');
+
+    $confLua = file_get_contents($tmpDir . '/projects/platformer-game/conf.lua');
+    expect($confLua)->toContain("t.version = '11.5'");
+    expect($confLua)->toContain('t.console = true');
 
     // Cleanup
     $files = new RecursiveIteratorIterator(
@@ -134,5 +140,29 @@ test('listInstances returns empty when no instances running', function () {
 
     expect($instances)->toBe([]);
 
+    rmdir($tmpDir);
+});
+
+test('createProject can scaffold into an explicit project directory', function () {
+    $tmpDir = sys_get_temp_dir() . '/love2d-test-' . uniqid();
+    mkdir($tmpDir . '/projects/existing-root', 0755, true);
+
+    $runner = new Love2DRunner(workspacePath: $tmpDir);
+    $result = $runner->createProject([
+        'name' => 'test-project',
+        'project' => 'projects/existing-root',
+    ]);
+
+    expect($result['success'])->toBeTrue();
+    expect($result['path'])->toBe('projects/existing-root');
+    expect(is_file($tmpDir . '/projects/existing-root/main.lua'))->toBeTrue();
+
+    $files = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($tmpDir, RecursiveDirectoryIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST,
+    );
+    foreach ($files as $file) {
+        $file->isDir() ? rmdir($file->getRealPath()) : unlink($file->getRealPath());
+    }
     rmdir($tmpDir);
 });

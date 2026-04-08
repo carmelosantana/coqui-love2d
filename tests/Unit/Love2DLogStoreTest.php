@@ -13,6 +13,9 @@ test('creates table on connect', function () {
 
     $db = new PDO("sqlite:{$dbPath}");
     $result = $db->query("SELECT name FROM sqlite_master WHERE type='table' AND name='output_log'");
+    if ($result === false) {
+        throw new RuntimeException('Failed to query sqlite_master for output_log table.');
+    }
     expect($result->fetchColumn())->toBe('output_log');
 
     unlink($dbPath);
@@ -113,7 +116,8 @@ test('stats returns level counts', function () {
     $store->log('warning', 'Four');
 
     $stats = $store->stats();
-    expect($stats)->toBeArray()->not->toBeEmpty();
+    expect($stats)->toBeArray();
+    expect(count($stats))->toBe(5);
     expect($stats['total'])->toBe(4);
     expect($stats['levels'])->toBeArray();
     expect($stats['levels']['info'])->toBe(2);
@@ -164,12 +168,62 @@ test('importFromFile parses log lines', function () {
         'Debug: FPS: 60',
     ]));
 
-    $imported = $store->importFromFile($logFile);
+    $imported = $store->importFromFile($logFile, 'instance-a', 'projects/test-game');
     expect($imported)->toBe(4);
 
-    $entries = $store->tail(10);
+    $entries = $store->tail(10, instanceName: 'instance-a');
+    expect($entries)->toHaveCount(4);
+    expect($entries[0]['project_path'] ?? null)->toBe('projects/test-game');
+    expect($entries[0]['log_file'] ?? null)->toBe($logFile);
+
+    unlink($dbPath);
+    unlink($logFile);
+});
+
+test('importFromFile resumes from previous offset for the same log file', function () {
+    $dbPath = sys_get_temp_dir() . '/love2d-log-test-' . uniqid() . '.db';
+    $logFile = sys_get_temp_dir() . '/love2d-output-test-' . uniqid() . '.log';
+    $store = new Love2DLogStore($dbPath);
+
+    file_put_contents($logFile, "line one\nline two\n");
+    expect($store->importFromFile($logFile, 'instance-a', 'projects/test-game'))->toBe(2);
+
+    expect($store->importFromFile($logFile, 'instance-a', 'projects/test-game'))->toBe(0);
+
+    file_put_contents($logFile, implode("\n", [
+        'line one',
+        'line two',
+        'line three',
+        'line four',
+    ]));
+    expect($store->importFromFile($logFile, 'instance-a', 'projects/test-game'))->toBe(2);
+
+    $entries = $store->tail(10, instanceName: 'instance-a');
     expect($entries)->toHaveCount(4);
 
     unlink($dbPath);
     unlink($logFile);
+});
+
+test('tail filters by project path', function () {
+    $dbPath = sys_get_temp_dir() . '/love2d-log-test-' . uniqid() . '.db';
+    $store = new Love2DLogStore($dbPath);
+
+    $reflection = new ReflectionClass($store);
+    $method = $reflection->getMethod('connect');
+    $method->setAccessible(true);
+    /** @var PDO $db */
+    $db = $method->invoke($store);
+
+    $stmt = $db->prepare(
+        'INSERT INTO output_log (timestamp, level, message, source, instance_name, project_path, log_file, line_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    $stmt->execute([date('c'), 'info', 'first', 'stdout', 'a', 'projects/a', '/tmp/a.log', 1]);
+    $stmt->execute([date('c'), 'info', 'second', 'stdout', 'b', 'projects/b', '/tmp/b.log', 1]);
+
+    $entries = $store->tail(10, projectPath: 'projects/a');
+    expect($entries)->toHaveCount(1);
+    expect($entries[0]['message'])->toBe('first');
+
+    unlink($dbPath);
 });

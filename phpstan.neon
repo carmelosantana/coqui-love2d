@@ -6,3 +6,7 @@ parameters:
     paths:
         - src
     tmpDir: .phpstan-cache
+    ignoreErrors:
+        -
+            identifier: method.internalClass
+            path: tests/*

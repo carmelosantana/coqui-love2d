@@ -68,6 +68,7 @@ final class Love2DToolkit implements ToolkitInterface
             ### Workflow — Creating a Game
             1. **Create project**: `love2d` action `create` with `name` and optional `template`
                (blank, platformer, top-down, puzzle, particle-demo)
+              Optional: pass `project` to scaffold directly into an existing Coqui project directory.
             2. **Generate components**: `love2d_template` to scaffold player, enemy, camera, etc.
             3. **Write game code**: Edit `main.lua` and other Lua files in the project directory
             4. **Run natively**: `love2d` action `run` with `project` set to the project name
@@ -77,12 +78,12 @@ final class Love2DToolkit implements ToolkitInterface
             8. **Export to web**: `love2d` action `export_web` to create a browser-playable version
 
             ### `love2d` Tool — Project & Process Lifecycle
-            - **create**: Scaffold a new Love2D project with conf.lua, main.lua, and assets directory.
-              Specify `name` (required) and optional `template`, `title`, `width`, `height`.
+            - **create**: Scaffold a new Love2D project with conf.lua, main.lua, assets directory,
+              and project-local debug logging. Specify `name` (required) and optional `template`,
+              `title`, `width`, `height`, and `project` to scaffold into an existing Coqui project directory.
             - **run**: Launch Love2D with a project. Specify `project` (directory name).
-              Optional: `args` for extra CLI arguments.
             - **stop**: Stop a running Love2D instance by `name`.
-            - **status**: Get details — PID, uptime, project path.
+            - **status**: Get details — PID, uptime, project path, log locations, binary path, and detected version.
             - **list**: Show all managed Love2D instances.
             - **build**: Create a .love archive from a project. Specify `project`.
             - **export_web**: Export project for browser play via love.js. Specify `project`.
@@ -98,8 +99,8 @@ final class Love2DToolkit implements ToolkitInterface
               Types: menu, gameplay, pause, game-over, settings, level-select.
 
             ### `love2d_log` Tool — Output Monitoring
-            - **tail**: Last N log entries (default 50). Filter by `level` (info/warning/error/debug).
-            - **search**: Search by `query` string across log messages.
+            - **tail**: Last N log entries (default 50). Filter by `level`, `name`, or `project`.
+            - **search**: Search by `query` string across log messages, optionally filtered by instance or project.
             - **clear**: Delete all log entries.
 
             ### Coqui API Bridge
@@ -117,16 +118,18 @@ final class Love2DToolkit implements ToolkitInterface
 
             ### Key Considerations
             - Love2D must be installed on the system (`love` binary on PATH)
+            - The toolkit targets Love2D 11.5 and surfaces the installed runtime version in tool output
             - For web export, Node.js and `love.js` npm package are required
-            - Projects are stored in the workspace under `love2d-projects/`
-            - Each running instance has its own PID file and log file
+            - New projects default to `workspace/projects/<name>/` unless you supply an explicit `project` path
+            - Runtime PID/metadata live under `workspace/love2d/`, but each project stores logs in `.coqui/love2d/logs/`
+            - Each run writes a timestamped log file and updates a stable `latest.log` pointer inside the project
             - Use the webserver toolkit to serve exported web builds
             - Game window resolution defaults to 800×600 but can be customized in conf.lua
 
             ### Game Development Tips
             - Start with a template that matches the game genre
             - Build incrementally: get movement working, then add enemies, then scoring
-            - Use `love2d_log tail` frequently to catch Lua errors
+            - After every launch, check `latest.log` or use `love2d_log tail` before assuming the startup succeeded
             - The state_machine component is essential for multi-screen games
             - Test with `love2d run` before building archives
             - Use `love2d_template generate_component type:collision` for physics
