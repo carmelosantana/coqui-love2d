@@ -11,6 +11,7 @@ A comprehensive Love2D game development toolkit for [Coqui](https://github.com/c
 - **Web Export** — Export games as browser-playable builds via love.js
 - **Log Monitoring** — Structured log viewing and search for debugging
 - **Bot Communication** — Bidirectional Lua/JS bridge for game↔bot API calls
+- **Built-In API Reference** — Bundled LÖVE 11.5 API documentation with full-text search (1000+ entries, no network access needed)
 - **Companion Skill** — Love2D game dev best practices and workflow guidance
 
 ## Requirements
@@ -63,6 +64,16 @@ The toolkit is auto-discovered by Coqui on next startup — no configuration nee
 | `tail` | Show recent log entries (filterable by level, instance name, or project path) |
 | `search` | Search logs by keyword, optionally filtered by instance name or project path |
 | `clear` | Clear all log entries |
+
+### `love2d_doc` — API Reference
+
+| Action | Description |
+|--------|-------------|
+| `search` | Full-text search across all Love2D functions, types, enums, and callbacks |
+| `lookup` | Look up a specific API entry by name with full signatures and argument details |
+| `list_modules` | List all Love2D modules with entry counts |
+
+The documentation is bundled from the [love2d-community/love-api](https://github.com/love2d-community/love-api) project and covers LÖVE 11.5 with 1000+ entries. No network access is required at runtime — the data ships as a pre-built JSON file and is cached locally in SQLite with FTS5 for fast keyword search.
 
 ## Project Layout
 
@@ -180,11 +191,14 @@ src/
   Love2DTool.php                 # Primary tool: create/run/stop/build/export
   Love2DTemplateTool.php         # Code generation: components + scenes
   Love2DLogTool.php              # Log viewer: tail/search/clear
+  Love2DDocTool.php              # API reference: search/lookup/list_modules
   Runtime/
     Love2DRunner.php             # Process manager + project operations
   Storage/
     Love2DLogStore.php           # SQLite log store
+    Love2DDocStore.php           # SQLite FTS5 doc cache
   Resources/
+    love2d-api.json              # Bundled LÖVE 11.5 API data (generated)
     coqui_api.lua                # Lua bridge (copied into projects)
     coqui_bridge.js              # JS bridge (for love.js web export)
     index.html                   # Web export HTML template
@@ -194,6 +208,8 @@ src/
       top-down/
       puzzle/
       particle-demo/
+scripts/
+  build-docs.php                 # Generates love2d-api.json from love-api repo
 skills/
   love2d-game-dev/
     SKILL.md                     # Companion skill for game dev guidance
@@ -202,6 +218,7 @@ tests/
     Love2DToolkitTest.php
     Love2DRunnerTest.php
     Love2DLogStoreTest.php
+    Love2DDocStoreTest.php
     Love2DToolsTest.php
 ```
 
