@@ -6,6 +6,7 @@ namespace CarmeloSantana\CoquiToolkitLove2D;
 
 use CarmeloSantana\PHPAgents\Contract\ToolkitInterface;
 use CarmeloSantana\CoquiToolkitLove2D\Runtime\Love2DRunner;
+use CarmeloSantana\CoquiToolkitLove2D\Storage\Love2DDocStore;
 use CarmeloSantana\CoquiToolkitLove2D\Storage\Love2DLogStore;
 
 /**
@@ -23,15 +24,21 @@ final class Love2DToolkit implements ToolkitInterface
 {
     private readonly Love2DRunner $runner;
     private readonly Love2DLogStore $logStore;
+    private readonly Love2DDocStore $docStore;
 
     public function __construct(
         string $workspacePath,
         ?Love2DRunner $runner = null,
         ?Love2DLogStore $logStore = null,
+        ?Love2DDocStore $docStore = null,
     ) {
         $this->runner = $runner ?? new Love2DRunner($workspacePath);
         $this->logStore = $logStore ?? new Love2DLogStore(
             $workspacePath . '/love2d-logs.db',
+        );
+        $this->docStore = $docStore ?? new Love2DDocStore(
+            jsonPath: __DIR__ . '/Resources/love2d-api.json',
+            dbCachePath: $workspacePath . '/love2d-docs.db',
         );
     }
 
@@ -54,6 +61,7 @@ final class Love2DToolkit implements ToolkitInterface
             new Love2DTool($this->runner),
             new Love2DTemplateTool(),
             new Love2DLogTool($this->runner, $this->logStore),
+            new Love2DDocTool($this->docStore),
         ];
     }
 
@@ -126,6 +134,17 @@ final class Love2DToolkit implements ToolkitInterface
             - Use the webserver toolkit to serve exported web builds
             - Game window resolution defaults to 800×600 but can be customized in conf.lua
 
+            ### `love2d_doc` Tool — API Reference
+            - **search**: Full-text search across all Love2D API entries. Specify `query` (required),
+              optional `module` filter (e.g. "graphics"), optional `limit` (default 10).
+            - **lookup**: Look up a specific API entry by name. Specify `name` (e.g. "love.graphics.draw",
+              "Body:applyForce", "DrawMode"). Returns full documentation with all signatures.
+            - **list_modules**: List all Love2D modules with entry counts.
+
+            Use `love2d_doc` to answer questions about Love2D API functions, types, enums, and
+            callbacks without needing external documentation access. The bundled reference covers
+            LÖVE 11.5 and includes 1000+ entries.
+
             ### Game Development Tips
             - Start with a template that matches the game genre
             - Build incrementally: get movement working, then add enemies, then scoring
@@ -134,6 +153,8 @@ final class Love2DToolkit implements ToolkitInterface
             - Test with `love2d run` before building archives
             - Use `love2d_template generate_component type:collision` for physics
             - Web export uses compatibility mode by default for wider browser support
+            - Use `love2d_doc lookup` to check function signatures before writing game code
+            - Use `love2d_doc search` to discover relevant API functions for a feature
             </LOVE2D-TOOLKIT-GUIDELINES>
             GUIDELINES;
     }

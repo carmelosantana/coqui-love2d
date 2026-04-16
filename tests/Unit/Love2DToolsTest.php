@@ -6,8 +6,10 @@ use CarmeloSantana\PHPAgents\Enum\ToolResultStatus;
 use CarmeloSantana\CoquiToolkitLove2D\Love2DTool;
 use CarmeloSantana\CoquiToolkitLove2D\Love2DTemplateTool;
 use CarmeloSantana\CoquiToolkitLove2D\Love2DLogTool;
+use CarmeloSantana\CoquiToolkitLove2D\Love2DDocTool;
 use CarmeloSantana\CoquiToolkitLove2D\Runtime\Love2DRunner;
 use CarmeloSantana\CoquiToolkitLove2D\Storage\Love2DLogStore;
+use CarmeloSantana\CoquiToolkitLove2D\Storage\Love2DDocStore;
 
 // ── Love2DTool ──────────────────────────────────────────────────────
 
@@ -236,4 +238,107 @@ test('log tool returns error for unknown action', function () {
     expect($result->status)->toBe(ToolResultStatus::Error);
 
     rmdir($tmpDir);
+});
+
+// ── Love2DDocTool ───────────────────────────────────────────────────
+
+function createDocTool(): Love2DDocTool
+{
+    $jsonPath = __DIR__ . '/../../src/Resources/love2d-api.json';
+    $dbPath = sys_get_temp_dir() . '/love2d-doc-tool-test-' . uniqid() . '.db';
+
+    return new Love2DDocTool(new Love2DDocStore($jsonPath, $dbPath));
+}
+
+test('doc tool has correct name', function () {
+    $tool = createDocTool();
+    expect($tool->name())->toBe('love2d_doc');
+});
+
+test('doc tool has description', function () {
+    $tool = createDocTool();
+    $description = $tool->description();
+
+    expect($description)->toBeString();
+    expect($description === '')->toBeFalse();
+});
+
+test('doc tool has valid function schema', function () {
+    $tool = createDocTool();
+    $schema = $tool->toFunctionSchema();
+
+    expect($schema['type'])->toBe('function');
+    expect($schema['function']['name'])->toBe('love2d_doc');
+    expect($schema['function']['parameters']['properties'])->toHaveKey('action');
+    expect($schema['function']['parameters']['properties'])->toHaveKey('query');
+    expect($schema['function']['parameters']['properties'])->toHaveKey('name');
+    expect($schema['function']['parameters']['properties'])->toHaveKey('module');
+    expect($schema['function']['parameters']['required'])->toContain('action');
+});
+
+test('doc tool returns error for unknown action', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'invalid_action']);
+    expect($result->status)->toBe(ToolResultStatus::Error);
+});
+
+test('doc tool search returns results', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'search', 'query' => 'draw']);
+    expect($result->status)->not->toBe(ToolResultStatus::Error);
+    expect($result->content)->toContain('love.graphics.draw');
+    expect($result->content)->toContain('Search Results');
+});
+
+test('doc tool search requires query', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'search']);
+    expect($result->status)->toBe(ToolResultStatus::Error);
+});
+
+test('doc tool search with module filter', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'search', 'query' => 'new', 'module' => 'graphics']);
+    expect($result->status)->not->toBe(ToolResultStatus::Error);
+    expect($result->content)->toContain('graphics');
+});
+
+test('doc tool lookup returns full entry', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'lookup', 'name' => 'love.graphics.draw']);
+    expect($result->status)->not->toBe(ToolResultStatus::Error);
+    expect($result->content)->toContain('love.graphics.draw');
+    expect($result->content)->toContain('function');
+    expect($result->content)->toContain('Signatures');
+});
+
+test('doc tool lookup requires name', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'lookup']);
+    expect($result->status)->toBe(ToolResultStatus::Error);
+});
+
+test('doc tool lookup returns not found gracefully', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'lookup', 'name' => 'nonexistent.thing']);
+    expect($result->status)->not->toBe(ToolResultStatus::Error);
+    expect($result->content)->toContain('Not Found');
+});
+
+test('doc tool list_modules returns module table', function () {
+    $tool = createDocTool();
+
+    $result = $tool->execute(['action' => 'list_modules']);
+    expect($result->status)->not->toBe(ToolResultStatus::Error);
+    expect($result->content)->toContain('graphics');
+    expect($result->content)->toContain('audio');
+    expect($result->content)->toContain('physics');
+    expect($result->content)->toContain('Modules');
 });

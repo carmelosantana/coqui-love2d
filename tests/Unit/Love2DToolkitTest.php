@@ -10,14 +10,14 @@ test('toolkit implements ToolkitInterface', function () {
     expect($toolkit)->toBeInstanceOf(\CarmeloSantana\PHPAgents\Contract\ToolkitInterface::class);
 });
 
-test('tools returns all three love2d tools', function () {
+test('tools returns all four love2d tools', function () {
     $toolkit = new Love2DToolkit(workspacePath: sys_get_temp_dir());
     $tools = $toolkit->tools();
 
-    expect($tools)->toHaveCount(3);
+    expect($tools)->toHaveCount(4);
 
     $names = array_map(fn($tool) => $tool->name(), $tools);
-    expect($names)->toBe(['love2d', 'love2d_template', 'love2d_log']);
+    expect($names)->toBe(['love2d', 'love2d_template', 'love2d_log', 'love2d_doc']);
 });
 
 test('each tool implements ToolInterface', function () {
