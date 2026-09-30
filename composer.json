@@ -20,7 +20,7 @@
         "php": "^8.4"
     },
     "require-dev": {
-        "carmelosantana/php-agents": "^0.7",
+        "carmelosantana/php-agents": "^0.13",
         "pestphp/pest": "^3.0",
         "phpstan/phpstan": "^2.0"
     },
